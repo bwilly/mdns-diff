@@ -30,24 +30,20 @@ Also, this script considers that all items in the array have a unique 'name' fie
 
 const fs = require('fs');
 const _ = require('lodash');
+const path = require('path');
 const { Parser } = require('json2csv');
 
-// Function to convert JSON array to map for easy comparison
-const convertArrayToMap = (arr, keyField) =>
-  Object.assign({}, ...arr.map(item => ({ [item[keyField]]: item })))
-
-const compareFiles = (file1, file2) => {
+const compareFiles = (file1, file2, fields) => {
   let rawdata1 = fs.readFileSync(file1);
   let rawdata2 = fs.readFileSync(file2);
 
   let json1 = JSON.parse(rawdata1);
   let json2 = JSON.parse(rawdata2);
 
-  let map1 = convertArrayToMap(json1, 'name');
-  let map2 = convertArrayToMap(json2, 'name');
+  let trimmedJson1 = json1.map(item => _.pick(item, fields));
+  let trimmedJson2 = json2.map(item => _.pick(item, fields));
 
-  // Now, compare these maps using lodash
-  let differences = _.differenceWith(json1, json2, _.isEqual);
+  let differences = _.differenceWith(trimmedJson1, trimmedJson2, _.isEqual);
 
   return differences;
 };
@@ -63,12 +59,62 @@ const writeCSV = (diff, outputFile) => {
   }
 };
 
+const deleteFile = (filePath) => {
+  try {
+    fs.unlinkSync(filePath);
+    console.log("File deleted successfully!");
+  } catch (err) {
+    console.error("Error deleting file: ", err);
+  }
+};
+
+const listFilesWithSuffix = (filePath, excludeFilePath) => {
+  let dir = path.dirname(filePath);
+  let baseName = path.basename(filePath);
+  let excludeFileName = path.basename(excludeFilePath);
+  let files = fs.readdirSync(dir);
+  let regex = new RegExp('^' + baseName + '\\.\\d+$');
+  return files.filter(file => file !== excludeFileName && regex.test(file)).map(file => path.join(dir, file));
+};
+
 const file1 = process.argv[2];
 const file2 = process.argv[3];
 const outputFile = process.argv[4];
+const fields = process.argv[5].split(',');
+const deleteFlag = process.argv.includes('--delete');
 
-const differences = compareFiles(file1, file2);
-console.log("running...");
-console.log(differences);
-writeCSV(differences, outputFile);
+const differences = compareFiles(file1, file2, fields);
 
+if (differences.length > 0) {
+  console.log(differences.length);
+  console.log(differences);
+  writeCSV(differences, outputFile);
+} else {
+  console.log("Did not find any changes. Deleting older backup file.");
+
+  // Get all files matching the pattern
+  let files = listFilesWithSuffix(file2, file1);
+
+  // Delete all files with no diff from file1
+  let deleteCount = 0;
+  files.forEach(file => {
+    let diff = compareFiles(file1, file2, fields);
+    if (diff.length === 0) {
+      deleteCount++;
+      if (deleteFlag) {
+        deleteFile(file);
+      } else {
+        console.log("If delete enabled, would have deleted file: " + file);
+      }
+    }
+  });
+
+  // todo: this could be part of the list of files to delete even tho it is the file keying the deletes
+  if (deleteFlag) {
+    deleteFile(file1);
+  } else {
+    console.log("If delete enabled, would have deleted file: " + file1);
+  }
+
+  console.log("Delete count (if enabled) would be (not inlcuding key del file): " + deleteCount);
+}
